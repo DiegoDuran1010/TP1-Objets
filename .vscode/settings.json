@@ -1,0 +1,5 @@
+{
+    "python.analysis.extraPaths": [
+        "./Freenove_Ultimate_Starter_Kit_for_Raspberry_Pi-master/Code/Python_Code/11.1.1_Thermometer"
+    ]
+}

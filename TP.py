@@ -5,13 +5,122 @@ Ce ceci est un commentaire multi ligne
 
 '''
 
-from cgitb import grey
+from cgitb import grey, text
 from time import timezone
 from tkinter import *
 from tkinter import font
 from tkinter.font import BOLD
+from setuptools import Command
+import RPi.GPIO as GPIO
+import time
+import math
+from ADCDevice import *
+trigPin = 16
+echoPin = 18
+MAX_DISTANCE = 220          # define the maximum measuring distance, unit: cm
+timeOut = MAX_DISTANCE*60   # calculate timeout according to the maximum measuring distance 
+motorPins = (12, 16, 18, 22)    # define pins connected to four phase ABCD of stepper motor
+CCWStep = (0x01,0x02,0x04,0x08) # define power supply order for rotating anticlockwise 
+CWStep = (0x08,0x04,0x02,0x01)  # define power supply order for rotating clockwise
+adc = ADCDevice() # Define an ADCDevice class object
 
-   
+
+def setupThermo():
+    global adc
+    if(adc.detectI2C(0x48)): # Detect the pcf8591.
+        adc = PCF8591()
+    elif(adc.detectI2C(0x4b)): # Detect the ads7830
+        adc = ADS7830()
+    else:
+        print("No correct I2C address found, \n"
+        "Please use command 'i2cdetect -y 1' to check the I2C address! \n"
+        "Program Exit. \n");
+        exit(-1)
+        
+def loop():
+    while True:
+        value = adc.analogRead(0)        # read ADC value A0 pin
+        voltage = value / 255.0 * 3.3        # calculate voltage
+        Rt = 10 * voltage / (3.3 - voltage)    # calculate resistance value of thermistor
+        tempK = 1/(1/(273.15 + 25) + math.log(Rt/10)/3950.0) # calculate temperature (Kelvin)
+        tempC = tempK -273.15        # calculate temperature (Celsius)
+        #print ('ADC Value : %d, Voltage : %.2f, Temperature : %.2f'%(value,voltage,tempC))
+        print(tempC)
+        time.sleep(0.01)
+
+def destroy():
+    adc.close()
+    GPIO.cleanup()
+    
+
+
+def pulseIn(pin,level,timeOut): # obtain pulse time of a pin under timeOut
+    t0 = time.time()
+    while(GPIO.input(pin) != level):
+        if((time.time() - t0) > timeOut*0.000001):
+            return 0;
+    t0 = time.time()
+    while(GPIO.input(pin) == level):
+        if((time.time() - t0) > timeOut*0.000001):
+            return 0;
+    pulseTime = (time.time() - t0)*1000000
+    return pulseTime
+    
+def getSonar():     # get the measurement results of ultrasonic module,with unit: cm
+    GPIO.output(trigPin,GPIO.HIGH)      # make trigPin output 10us HIGH level 
+    time.sleep(0.00001)     # 10us
+    GPIO.output(trigPin,GPIO.LOW) # make trigPin output LOW level 
+    pingTime = pulseIn(echoPin,GPIO.HIGH,timeOut)   # read plus time of echoPin
+    distance = pingTime * 340.0 / 2.0 / 10000.0     # calculate distance with sound speed 340m/s 
+    return distance
+    
+def setupSonar():
+    GPIO.setmode(GPIO.BOARD)      # use PHYSICAL GPIO Numbering
+    GPIO.setup(trigPin, GPIO.OUT)   # set trigPin to OUTPUT mode
+    GPIO.setup(echoPin, GPIO.IN)    # set echoPin to INPUT mode
+
+def loop():
+    while(True):
+        distance = getSonar() # get distance
+        print ("The distance is : %.2f cm"%(distance))
+        time.sleep(1)
+
+def setupMotor():    
+    GPIO.setmode(GPIO.BOARD)       # use PHYSICAL GPIO Numbering
+    for pin in motorPins:
+        GPIO.setup(pin,GPIO.OUT)
+        
+# as for four phase stepping motor, four steps is a cycle. the function is used to drive the stepping motor clockwise or anticlockwise to take four steps    
+def moveOnePeriod(direction,ms):    
+    for j in range(0,4,1):      # cycle for power supply order
+        for i in range(0,4,1):  # assign to each pin
+            if (direction == 1):# power supply order clockwise
+                GPIO.output(motorPins[i],((CCWStep[j] == 1<<i) and GPIO.HIGH or GPIO.LOW))
+            else :              # power supply order anticlockwise
+                GPIO.output(motorPins[i],((CWStep[j] == 1<<i) and GPIO.HIGH or GPIO.LOW))
+        if(ms<3):       # the delay can not be less than 3ms, otherwise it will exceed speed limit of the motor
+            ms = 3
+        time.sleep(ms*0.001)    
+        
+# continuous rotation function, the parameter steps specifies the rotation cycles, every four steps is a cycle
+def moveSteps(direction, ms, steps):
+    for i in range(steps):
+        moveOnePeriod(direction, ms)
+        
+# function used to stop motor
+def motorStop():
+    for i in range(0,4,1):
+        GPIO.output(motorPins[i],GPIO.LOW)
+            
+def loop():
+    while True:
+        moveSteps(1,3,512)  # rotating 360 deg clockwise, a total of 2048 steps in a circle, 512 cycles
+        time.sleep(0.5)
+        moveSteps(0,3,512)  # rotating 360 deg anticlockwise
+        time.sleep(0.5)
+
+def destroy():
+    GPIO.cleanup()             # Release resource
 
 def main():
     # Window est la variable qui va set la window pour l'interface
@@ -22,6 +131,12 @@ def main():
    # Variable lbl est la variable qui s'occupe d'afficher le titre de l'application
     lbl = Label(window, text = "Contrôle d'une porte d'aération d'une serre", fg='black', font=("Adobe arabic",12,BOLD))
     lbl.place(x= 150,y= 50)
+
+    lblTemp = Label(window, text="", Command = loop, fg='black',font=("Adobe arabic",BOLD,12))
+    lblTemp.place(x=155,y = 50)
+
+
+
     #Variable lbl2 est la variable qui s'occupe d'afficher la température de l'ouverture de la porte
     lbl2 = Label(window, text="Température d'ouverture de la porte : ", fg='black',font=("Adobe arabic",10,BOLD))
     lbl2.place(x = 10, y = 100)
@@ -72,6 +187,10 @@ def main():
 
 
 if __name__ == "__main__":
+    setupThermo()
+    setupSonar()
+    setupMotor()
+
     main()
 
 
